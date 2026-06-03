@@ -1,1 +1,117 @@
+import streamlit as st
+
+# Page Setup
+st.set_page_config(page_title="Advanced EV Optimizer", page_icon="⚡", layout="centered")
+st.title("⚡ Advanced EV Charger Optimizer")
+st.subheader("Subang Jaya Local Station Matcher")
+st.write("Input your specific vehicle configuration and target charge parameters below.")
+
+# Preconfigured Malaysian EV Database
+EV_MODELS = {
+    "BYD Atto 3 (Extended Range)": {"battery_kwh": 60.5, "max_ac_kw": 7.0, "max_dc_kw": 88.0},
+    "BYD Dolphin (Standard Range)": {"battery_kwh": 44.9, "max_ac_kw": 7.0, "max_dc_kw": 60.0},
+    "BYD Seal (Premium)": {"battery_kwh": 82.5, "max_ac_kw": 7.0, "max_dc_kw": 150.0},
+    "Tesla Model 3 (Standard RWD)": {"battery_kwh": 60.0, "max_ac_kw": 11.0, "max_dc_kw": 170.0},
+    "Tesla Model Y (Rear-Wheel Drive)": {"battery_kwh": 57.5, "max_ac_kw": 11.0, "max_dc_kw": 170.0},
+    "GWM Ora Good Cat (500 Ultra)": {"battery_kwh": 63.1, "max_ac_kw": 6.6, "max_dc_kw": 60.0},
+    "Smart #1 (Pro)": {"battery_kwh": 49.0, "max_ac_kw": 7.2, "max_dc_kw": 150.0},
+    "Custom / Other Vehicle": {"battery_kwh": 60.0, "max_ac_kw": 11.0, "max_dc_kw": 100.0}
+}
+
+# Charging Point Operators Database
+STATIONS = [
+    {"name": "Subang Parade (ParkEasy Hub)", "type": "AC", "power_kw": 22, "rate_per_kwh": 1.00, "rate_per_min": 0.0, "link": "https://www.plugshare.com/location/587223"},
+    {"name": "Sunway Pyramid (ChargeSini Hub)", "type": "AC", "power_kw": 22, "rate_per_kwh": 0.00, "rate_per_min": 0.40, "link": "https://www.chargesini.com/"},
+    {"name": "The Summit USJ (JomCharge)", "type": "DC", "power_kw": 60, "rate_per_kwh": 1.50, "rate_per_min": 0.0, "link": "https://cardog.app/tools/charging/my/subang-jaya-10"},
+    {"name": "UOA Business Park Glenmarie (DC Handal)", "type": "DC", "power_kw": 200, "rate_per_kwh": 1.70, "rate_per_min": 0.0, "link": "https://cardog.app/tools/charging/my/subang-jaya-10"},
+    {"name": "Shell Recharge Mint Hotel (High Speed)", "type": "DC", "power_kw": 180, "rate_per_kwh": 2.20, "rate_per_min": 0.0, "link": "https://www.gentari.com/go/charging-network/malaysia"}
+]
+
+# Sidebar Inputs: Vehicle Specs
+st.sidebar.header("🚗 1. Your Vehicle Details")
+selected_brand = st.sidebar.selectbox("Select Car Brand / Variant", list(EV_MODELS.keys()))
+
+default_specs = EV_MODELS[selected_brand]
+
+if selected_brand == "Custom / Other Vehicle":
+    battery_capacity = st.sidebar.number_input("Battery Size (Target kWh)", min_value=15.0, max_value=150.0, value=default_specs["battery_kwh"])
+    max_ac_limit = st.sidebar.number_input("Max Car AC Limit (kW)", min_value=3.3, max_value=22.0, value=default_specs["max_ac_kw"])
+    max_dc_limit = st.sidebar.number_input("Max Car DC Limit (kW)", min_value=20.0, max_value=350.0, value=default_specs["max_dc_kw"])
+else:
+    battery_capacity = default_specs["battery_kwh"]
+    max_ac_limit = default_specs["max_ac_kw"]
+    max_dc_limit = default_specs["max_dc_kw"]
+    st.sidebar.info(f"📋 **Specs for {selected_brand}:**\n* Battery: {battery_capacity} kWh\n* Max AC: {max_ac_limit} kW\n* Max DC: {max_dc_limit} kW")
+
+# Battery State Details
+st.sidebar.header("🔋 2. Charge Target Profiles")
+current_soc = st.sidebar.slider("Current Battery Level (%)", min_value=0, max_value=99, value=20)
+target_soc = st.sidebar.slider("Target Battery Level (%)", min_value=current_soc + 1, max_value=100, value=80)
+
+# Main Screen Constraints
+st.write("---")
+st.markdown("### ⏱️ Enter Current Session Constraints")
+col1, col2 = st.columns(2)
+
+with col1:
+    user_time_limit = st.number_input("Max Waiting Time (Minutes)", min_value=10, max_value=480, value=45, step=5)
+with col2:
+    user_budget = st.number_input("Max Budget Limit (RM)", min_value=5.0, max_value=300.0, value=40.0, step=5.0)
+
+# Calculation Engine
+soc_to_add = target_soc - current_soc
+needed_energy_kwh = battery_capacity * (soc_to_add / 100)
+
+st.write(f"📊 **Session Objective:** Inject **{needed_energy_kwh:.2f} kWh** into the car to climb from **{current_soc}%** up to **{target_soc}%**.")
+
+results = []
+for station in STATIONS:
+    if station["type"] == "AC":
+        actual_speed = min(station["power_kw"], max_ac_limit)
+    else:
+        actual_speed = min(station["power_kw"], max_dc_limit)
+        
+    max_energy_by_time = actual_speed * (user_time_limit / 60)
+    energy_to_charge = min(needed_energy_kwh, max_energy_by_time)
+    
+    time_needed_mins = (energy_to_charge / actual_speed) * 60
+    
+    cost = (energy_to_charge * station["rate_per_kwh"]) + (time_needed_mins * station["rate_per_min"])
+    
+    if cost <= user_budget and time_needed_mins <= user_time_limit:
+        achieved_target = "Yes" if energy_to_charge >= needed_energy_kwh else "Partial"
+        
+        results.append({
+            "name": station["name"],
+            "type": station["type"],
+            "power": f"{station['power_kw']} kW",
+            "energy": energy_to_charge,
+            "time": time_needed_mins,
+            "cost": cost,
+            "target_reached": achieved_target,
+            "link": station["link"]
+        })
+
+results = sorted(results, key=lambda x: x["cost"])
+
+# Display Content Output
+st.write("---")
+st.markdown("### 🏆 Filtered Matches Ranked by Cost")
+
+if not results:
+    st.error("❌ No stations found within your parameters. Try reducing target percentage, or extending budget / time windows.")
+else:
+    for idx, charger in enumerate(results, 1):
+        status_color = "🟢 Full Target Reached" if charger["target_reached"] == "Yes" else "🟡 Partial Target Reached (Timed Out)"
+        
+        with st.expander(f"#{idx}: {charger['name']} ({charger['type']} {charger['power']}) — RM {charger['cost']:.2f}"):
+            st.markdown(f"**Status:** {status_color}")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Calculated Cost", f"RM {charger['cost']:.2f}")
+            col2.metric("Energy Delivered", f"{charger['energy']:.2f} kWh")
+            col3.metric("Duration Required", f"{charger['time']:.1f} mins")
+            
+            st.markdown(f"[📍 Directions & Mapping Resources]({charger['link']})")
+
+st.caption("ℹ️ DC speeds drop naturally past 80% battery capacity due to vehicle LFP/NMC thermal curve management.")
 
